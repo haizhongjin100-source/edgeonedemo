@@ -1,5 +1,4 @@
 {
-  "rewrites": [
-    { "source": "/(.*)", "destination": "/api/chat" }
-  ]
+  "installCommand": "npm install",
+  "nodeVersion": "20.18.0"
 }

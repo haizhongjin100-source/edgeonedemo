@@ -55,16 +55,17 @@ const SYSTEM_PROMPT = `你是海中金的数字分身，代表他回答访客的
 - 遇到不确定的问题，诚实说"这个我不太清楚，建议直接联系本人确认"，然后给出联系方式
 - 不要过度吹捧，他就是个普通大学生`;
 
-module.exports = async function handler(req, res) {
-    if (req.method !== 'POST') {
-        return res.status(405).json({ error: 'Method not allowed' });
-    }
-
+export async function onRequestPost(context) {
     try {
-        const { message, history = [] } = req.body;
+        const { request, env } = context;
+        const body = await request.json();
+        const { message, history = [] } = body;
 
         if (!message) {
-            return res.status(400).json({ error: '请提供消息内容' });
+            return new Response(JSON.stringify({ error: '请提供消息内容' }), {
+                status: 400,
+                headers: { 'Content-Type': 'application/json' }
+            });
         }
 
         const messages = [
@@ -73,13 +74,14 @@ module.exports = async function handler(req, res) {
             { role: 'user', content: message }
         ];
 
-        const baseUrl = process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com';
+        const baseUrl = env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com';
+        const apiKey = env.DEEPSEEK_API_KEY;
 
         const response = await fetch(`${baseUrl}/v1/chat/completions`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
-                'Authorization': `Bearer ${process.env.DEEPSEEK_API_KEY}`
+                'Authorization': `Bearer ${apiKey}`
             },
             body: JSON.stringify({
                 model: 'deepseek-chat',
@@ -93,47 +95,62 @@ module.exports = async function handler(req, res) {
         if (!response.ok) {
             const error = await response.text();
             console.error('DeepSeek API Error:', error);
-            return res.status(500).json({ error: 'AI服务暂时不可用' });
+            return new Response(JSON.stringify({ error: 'AI服务暂时不可用' }), {
+                status: 500,
+                headers: { 'Content-Type': 'application/json' }
+            });
         }
 
-        res.setHeader('Content-Type', 'text/event-stream');
-        res.setHeader('Cache-Control', 'no-cache');
-        res.setHeader('Connection', 'keep-alive');
-
+        // Stream SSE response
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
 
-        while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
+        const stream = new ReadableStream({
+            async start(controller) {
+                const encoder = new TextEncoder();
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
 
-            const chunk = decoder.decode(value, { stream: true });
-            const lines = chunk.split('\n').filter(line => line.trim() !== '');
+                    const chunk = decoder.decode(value, { stream: true });
+                    const lines = chunk.split('\n').filter(line => line.trim() !== '');
 
-            for (const line of lines) {
-                if (line.startsWith('data: ')) {
-                    const data = line.slice(6);
-                    if (data === '[DONE]') {
-                        res.write('data: [DONE]\n\n');
-                    } else {
-                        try {
-                            const parsed = JSON.parse(data);
-                            const content = parsed.choices?.[0]?.delta?.content;
-                            if (content) {
-                                res.write(`data: ${JSON.stringify({ content })}\n\n`);
+                    for (const line of lines) {
+                        if (line.startsWith('data: ')) {
+                            const data = line.slice(6);
+                            if (data === '[DONE]') {
+                                controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+                            } else {
+                                try {
+                                    const parsed = JSON.parse(data);
+                                    const content = parsed.choices?.[0]?.delta?.content;
+                                    if (content) {
+                                        controller.enqueue(encoder.encode(`data: ${JSON.stringify({ content })}\n\n`));
+                                    }
+                                } catch (e) {
+                                    // 忽略解析错误
+                                }
                             }
-                        } catch (e) {
-                            // 忽略解析错误
                         }
                     }
                 }
+                controller.close();
             }
-        }
+        });
 
-        res.end();
+        return new Response(stream, {
+            headers: {
+                'Content-Type': 'text/event-stream',
+                'Cache-Control': 'no-cache',
+                'Connection': 'keep-alive'
+            }
+        });
 
     } catch (error) {
         console.error('Server Error:', error);
-        res.status(500).json({ error: '服务器错误，请稍后重试' });
+        return new Response(JSON.stringify({ error: '服务器错误，请稍后重试' }), {
+            status: 500,
+            headers: { 'Content-Type': 'application/json' }
+        });
     }
-};
+}
