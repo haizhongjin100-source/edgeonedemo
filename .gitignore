@@ -38,3 +38,6 @@ Thumbs.db
 # IDE
 .vscode-test
 .pnp.*
+
+# Claude Code 项目文件
+CLAUDE.md
