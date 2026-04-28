@@ -7,8 +7,11 @@
 node_modules/
 
 # 日志
+logs
 *.log
 npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
 
 # 备份
 个人主页4.1/
@@ -21,6 +24,7 @@ npm-debug.log*
 .parcel-cache
 .npm
 .eslintcache
+.stylelintcache
 
 # 构建
 dist
@@ -30,3 +34,10 @@ out
 # 系统文件
 .DS_Store
 Thumbs.db
+
+# IDE
+.vscode-test
+.pnp.*
+
+# Claude Code 项目文件
+CLAUDE.md
