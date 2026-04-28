@@ -55,11 +55,56 @@ const SYSTEM_PROMPT = `你是海中金的数字分身，代表他回答访客的
 - 遇到不确定的问题，诚实说"这个我不太清楚，建议直接联系本人确认"，然后给出联系方式
 - 不要过度吹捧，他就是个普通大学生`;
 
+async function insertConversation(env, sessionId, userMessage) {
+    const url = env.SUPABASE_URL;
+    const key = env.SUPABASE_ANON_KEY;
+    if (!url || !key) return null;
+    try {
+        const res = await fetch(`${url}/rest/v1/conversations`, {
+            method: 'POST',
+            headers: {
+                'apikey': key,
+                'Authorization': `Bearer ${key}`,
+                'Content-Type': 'application/json',
+                'Prefer': 'return=representation'
+            },
+            body: JSON.stringify({
+                session_id: sessionId,
+                user_message: userMessage
+            })
+        });
+        const data = await res.json();
+        return data[0]?.id || null;
+    } catch (e) {
+        console.error('Supabase insert error:', e);
+        return null;
+    }
+}
+
+async function updateReply(env, id, reply) {
+    const url = env.SUPABASE_URL;
+    const key = env.SUPABASE_ANON_KEY;
+    if (!id || !url || !key) return;
+    try {
+        await fetch(`${url}/rest/v1/conversations?id=eq.${id}`, {
+            method: 'PATCH',
+            headers: {
+                'apikey': key,
+                'Authorization': `Bearer ${key}`,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ ai_reply: reply })
+        });
+    } catch (e) {
+        console.error('Supabase update error:', e);
+    }
+}
+
 export async function onRequestPost(context) {
     try {
         const { request, env } = context;
         const body = await request.json();
-        const { message, history = [] } = body;
+        const { message, history = [], session_id } = body;
 
         if (!message) {
             return new Response(JSON.stringify({ error: '请提供消息内容' }), {
@@ -67,6 +112,9 @@ export async function onRequestPost(context) {
                 headers: { 'Content-Type': 'application/json' }
             });
         }
+
+        // 存储用户消息
+        const recordId = await insertConversation(env, session_id || 'unknown', message);
 
         const messages = [
             { role: 'system', content: SYSTEM_PROMPT },
@@ -105,6 +153,8 @@ export async function onRequestPost(context) {
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
 
+        let fullReply = '';
+
         const stream = new ReadableStream({
             async start(controller) {
                 const encoder = new TextEncoder();
@@ -125,6 +175,7 @@ export async function onRequestPost(context) {
                                     const parsed = JSON.parse(data);
                                     const content = parsed.choices?.[0]?.delta?.content;
                                     if (content) {
+                                        fullReply += content;
                                         controller.enqueue(encoder.encode(`data: ${JSON.stringify({ content })}\n\n`));
                                     }
                                 } catch (e) {
@@ -135,6 +186,9 @@ export async function onRequestPost(context) {
                     }
                 }
                 controller.close();
+
+                // 流结束后存储 AI 回复
+                await updateReply(env, recordId, fullReply);
             }
         });
 
